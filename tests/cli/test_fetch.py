@@ -7,6 +7,7 @@ from virtualship.cli._fetch import (
     DOWNLOAD_METADATA,
     DownloadMetadata,
     IncompleteDownloadError,
+    _fetch,
     assert_complete_download,
     complete_download,
     create_hash,
@@ -15,6 +16,50 @@ from virtualship.cli._fetch import (
     hash_model,
     hash_to_filename,
 )
+from virtualship.expedition.schedule import Schedule
+from virtualship.expedition.ship_config import ShipConfig
+from virtualship.utils import get_example_config, get_example_schedule
+
+
+@pytest.fixture
+def copernicus_subset_no_download(monkeypatch):
+    """Mock the download function."""
+
+    def fake_download(output_filename, output_directory, **_):
+        Path(output_directory).joinpath(output_filename).touch()
+
+    monkeypatch.setattr("virtualship.cli._fetch.copernicusmarine.subset", fake_download)
+    yield
+
+
+@pytest.fixture
+def schedule(tmpdir):
+    out_path = tmpdir.join("schedule.yaml")
+
+    with open(out_path, "w") as file:
+        file.write(get_example_schedule())
+
+    schedule = Schedule.from_yaml(out_path)
+
+    return schedule
+
+
+@pytest.fixture
+def ship_config(tmpdir):
+    out_path = tmpdir.join("ship_config.yaml")
+
+    with open(out_path, "w") as file:
+        file.write(get_example_config())
+
+    ship_config = ShipConfig.from_yaml(out_path)
+
+    return ship_config
+
+
+@pytest.mark.usefixtures("copernicus_subset_no_download")
+def test_fetch(schedule, ship_config, tmpdir):
+    """Test the fetch command, but mock the download."""
+    _fetch(Path(tmpdir), "test", "test")
 
 
 def test_create_hash():

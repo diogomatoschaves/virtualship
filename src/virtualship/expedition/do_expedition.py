@@ -9,9 +9,8 @@ import pyproj
 from virtualship.cli._fetch import get_existing_download, get_space_time_region_hash
 from virtualship.utils import (
     CHECKPOINT,
-    SCHEDULE,
-    SHIP_CONFIG,
-    get_instruments_in_schedule,
+    _get_schedule,
+    _get_ship_config,
 )
 
 from .checkpoint import Checkpoint
@@ -21,7 +20,9 @@ from .schedule import Schedule
 from .ship_config import ShipConfig
 from .simulate_measurements import simulate_measurements
 from .simulate_schedule import ScheduleProblem, simulate_schedule
-from .verify_schedule import verify_schedule
+
+# projection used to sail between waypoints
+projection = pyproj.Geod(ellps="WGS84")
 
 
 def do_expedition(expedition_dir: str | Path, input_data: Path | None = None) -> None:
@@ -29,7 +30,7 @@ def do_expedition(expedition_dir: str | Path, input_data: Path | None = None) ->
     Perform an expedition, providing terminal feedback and file output.
 
     :param expedition_dir: The base directory for the expedition.
-    :param input_data: Input data folder folder (override used for testing).
+    :param input_data: Input data folder (override used for testing).
     """
     if isinstance(expedition_dir, str):
         expedition_dir = Path(expedition_dir)
@@ -37,21 +38,8 @@ def do_expedition(expedition_dir: str | Path, input_data: Path | None = None) ->
     ship_config = _get_ship_config(expedition_dir)
     schedule = _get_schedule(expedition_dir)
 
-    # remove instrument configurations that are not in schedule
-    instruments_in_schedule = get_instruments_in_schedule(schedule)
-
-    for instrument in [
-        "ARGO_FLOAT",
-        "DRIFTER",
-        "XBT",
-        "CTD",
-    ]:  # TODO make instrument names consistent capitals or lowercase throughout codebase
-        if (
-            hasattr(ship_config, instrument.lower() + "_config")
-            and instrument not in instruments_in_schedule
-        ):
-            print(f"{instrument} configuration provided but not in schedule.")
-            setattr(ship_config, instrument.lower() + "_config", None)
+    # Verify ship_config file is consistent with schedule
+    ship_config.verify(schedule)
 
     # load last checkpoint
     checkpoint = _load_checkpoint(expedition_dir)
@@ -59,17 +47,7 @@ def do_expedition(expedition_dir: str | Path, input_data: Path | None = None) ->
         checkpoint = Checkpoint(past_schedule=Schedule(waypoints=[]))
 
     # verify that schedule and checkpoint match
-    if (
-        not schedule.waypoints[: len(checkpoint.past_schedule.waypoints)]
-        == checkpoint.past_schedule.waypoints
-    ):
-        print(
-            "Past waypoints in schedule have been changed! Restore past schedule and only change future waypoints."
-        )
-        return
-
-    # projection used to sail between waypoints
-    projection = pyproj.Geod(ellps="WGS84")
+    checkpoint.verify(schedule)
 
     # load fieldsets
     input_data = _load_input_data(
@@ -79,8 +57,8 @@ def do_expedition(expedition_dir: str | Path, input_data: Path | None = None) ->
         input_data=input_data,
     )
 
-    # verify schedule makes sense
-    verify_schedule(projection, ship_config, schedule, input_data)
+    # verify schedule is valid
+    schedule.verify(ship_config.ship_speed_knots, input_data)
 
     # simulate the schedule
     schedule_results = simulate_schedule(
@@ -129,16 +107,6 @@ def do_expedition(expedition_dir: str | Path, input_data: Path | None = None) ->
     print("Your measurements can be found in the results directory.")
 
 
-def _get_ship_config(expedition_dir: Path) -> ShipConfig | None:
-    file_path = expedition_dir.joinpath(SHIP_CONFIG)
-    try:
-        return ShipConfig.from_yaml(file_path)
-    except FileNotFoundError as e:
-        raise FileNotFoundError(
-            f'Ship config not found. Save it to "{file_path}".'
-        ) from e
-
-
 def _load_input_data(
     expedition_dir: Path,
     schedule: Schedule,
@@ -172,24 +140,6 @@ def _load_input_data(
         load_xbt=ship_config.xbt_config is not None,
         load_ship_underwater_st=ship_config.ship_underwater_st_config is not None,
     )
-
-
-def _get_schedule(expedition_dir: Path) -> Schedule:
-    """Load Schedule object from yaml config file in `expedition_dir`."""
-    file_path = expedition_dir.joinpath(SCHEDULE)
-    try:
-        return Schedule.from_yaml(file_path)
-    except FileNotFoundError as e:
-        raise FileNotFoundError(f'Schedule not found. Save it to "{file_path}".') from e
-
-
-def _get_ship_config(expedition_dir: Path) -> Schedule:
-    """Load Schedule object from yaml config file in `expedition_dir`."""
-    file_path = expedition_dir.joinpath(SHIP_CONFIG)
-    try:
-        return ShipConfig.from_yaml(file_path)
-    except FileNotFoundError as e:
-        raise FileNotFoundError(f'Config not found. Save it to "{file_path}".') from e
 
 
 def _load_checkpoint(expedition_dir: Path) -> Checkpoint | None:
